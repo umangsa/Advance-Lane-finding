@@ -16,15 +16,18 @@ ny = 6  # vertical corners
 window_width = 15
 window_height = 80 # Break image into 9 vertical layers since image height is 720
 margin = 75 # How much to slide left and right for searching
+ym_per_pix = 3/72.0 # meters per pixel in y dimension
+xm_per_pix = 3.7/660.0 # meters per pixel in x dimension
+camera_center = 640 # center of the image
+
 
 # Define conversions in x and y from pixels space to meters
 road_width = deque(maxlen=5)
 road_width.append(600)
-left_lane = deque(maxlen=3)
-right_lane = deque(maxlen=3)
+left_lane = deque(maxlen=15)
+right_lane = deque(maxlen=15)
+road_radius = deque(maxlen=15)
 
-ym_per_pix = 27/720 # meters per pixel in y dimension
-xm_per_pix = 3.7/750 # meters per pixel in x dimension
 
 
 class Lane():
@@ -148,12 +151,18 @@ def find_window_centroids(warped, window_width, window_height, margin):
 	r_sum = np.sum(warped[int(3 * warped.shape[0] / 8):, int(warped.shape[1] / 2):], axis=0)
 	r_center = np.argmax(np.convolve(window,r_sum)) - window_width / 2 + int(warped.shape[1] / 2)
 
+	# if the road width is much bigger than the average width in past few frames, 
+	# it could mean that either of the points detected was incorrect
 	if(r_center - l_center >= np.mean(road_width) + 50) or (r_center - l_center <= np.mean(road_width) - 50):
+		# take from previous frame if we had detected a lane earlier
 		if lane.detected:
 			l_center = lane.l_center
 			r_center = lane.r_center
 		else:
-			
+			# no lane was detected earlier
+			# find a strong point that could be part of either the left or right lane
+			# the other lane point would be at a distance = avg road width from chosen reference
+
 			offset = window_width / 2
 			l_min_index = int(max(l_center + offset - margin, 0))
 			l_max_index = int(min(l_center + offset + margin, warped.shape[1]))
@@ -210,20 +219,27 @@ def find_window_centroids(warped, window_width, window_height, margin):
 		# window_centroids.append((l_center, r_center))
 
 		if conv_strength_r >= conv_thresh and conv_strength_l >= conv_thresh:
+			# both lane points have been detected
 			window_centroids.append((l_center, r_center))
 			l_center_prev = l_center
 			r_center_prev = r_center
 			road_width.append(r_center - l_center)
 		elif conv_strength_r < conv_thresh and conv_strength_l < conv_thresh:
+
+			# none were detected. Take previously detected points
 			window_centroids.append((l_center_prev, r_center_prev))
 			road_width.append(r_center_prev - l_center_prev)
 		elif conv_strength_l < conv_thresh :
+
+			# left lane detection is weak or missing
 			l_center = r_center - np.mean(road_width)
 			window_centroids.append((l_center, r_center))
 			r_center_prev = r_center
 			l_center_prev = l_center
 			road_width.append(r_center - l_center)
 		elif conv_strength_r < conv_thresh :
+
+			# right lane detection is weak or missing
 			r_center = l_center + np.mean(road_width)
 			window_centroids.append((l_center, r_center))
 			l_center_prev = l_center
@@ -352,24 +368,31 @@ def process_image(image, is_test = False):
 	left_lane.append(left_fitx)
 	right_lane.append(right_fitx)
 
-
+	# smoothen the lanes to avoid jumping of the detections
 	final_left_lane = np.mean(left_lane, axis=0)
 	final_right_lane = np.mean(right_lane, axis=0)
-	# radius_l, radius_r = calculate_radius(np.array(res_yvals), final_left_lane, final_right_lane)
+
+	# Calculate radius of the road curvature
+	radius = calculate_radius(np.array(res_yvals), np.array(leftx), np.array(rightx))
+
+	# Calculate the offet of car center w.r.t. lane center
+	# assumption - camera is mounted on the lane center
+	lane_center = (final_left_lane[0] + final_right_lane[0]) / 2.0
+	car_offset = abs(camera_center - lane_center) * xm_per_pix
+
 
 	# Combine the result with the original image
 	newwarp = project_lanes(warped, Minv, final_left_lane, final_right_lane, ploty)
 	result = cv2.addWeighted(img, 1, newwarp, 0.3, 0)
+	cv2.putText(result,"Radius: {:.2f} m".format(radius), (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
+	cv2.putText(result,"Offset: {:.2f} m".format(car_offset), (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
 
 	if is_test == True:	
-		# plot and save the transformations
+		# plot and save the transformations. Used for the test images only
 		tkns = filename.split("/")
 		fname = "output_images/warped_" + tkns[1]
 
 		fig = plt.figure(figsize=(16, 9))
-
-		# f, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6, 3, figsize=(24, 9))
-		# fig.tight_layout()
 
 		ax1 = fig.add_subplot(231)
 		ax1.imshow(img)
@@ -402,7 +425,7 @@ def process_image(image, is_test = False):
 		ax6.imshow(result)
 
 		fig.savefig(fname)
-		plt.show()
+		# plt.show()
 
 	return result
 
@@ -419,8 +442,11 @@ def calculate_radius(ploty, left, right):
 	left_curverad = ((1 + (2*left_fit[0]*y_eval + left_fit[1])**2)**1.5) / np.absolute(2*left_fit[0])
 	right_curverad = ((1 + (2*right_fit[0]*y_eval + right_fit[1])**2)**1.5) / np.absolute(2*right_fit[0])
 
-	# print(left_curverad, right_curverad)
-	return left_curverad, right_curverad
+	radius = (left_curverad+right_curverad)/2.0
+	road_radius.append(radius)
+	radius = np.mean(road_radius)
+
+	return radius
 
 
 # First Calibrate the camera
@@ -436,11 +462,11 @@ ret, mtx, dist, rvecs, tvecs = calibrate_camera()
 # Save the final images
 # This will allow us to verify that the calibration is done correctly
 
-'''
-TEMP
 for filename in glob.iglob("camera_cal/calibration*.jpg"):
 	img = mpimg.imread(filename)
+	img_size = img.shape
 	dst = cv2.undistort(img, mtx, dist, None, mtx)
+	'''
 	gray = cv2.cvtColor(dst, cv2.COLOR_RGB2GRAY)
 	ret, corners = cv2.findChessboardCorners(gray, (nx, ny), None)
 	if ret:
@@ -456,22 +482,32 @@ for filename in glob.iglob("camera_cal/calibration*.jpg"):
 			[img_size[0]-100, img_size[1]-100], 
 			[100, img_size[1]-100]])
 
-		warped = fix_perspective(dst, mtx, dist, src, dest)
-		tkns = filename.split("/")
-		fname = "output_images/warped_" + tkns[1]
-		Image.fromarray(warped).save(fname)
-'''
+		warped, Minv = fix_perspective(dst, mtx, dist, src, dest)
+	'''
+	tkns = filename.split("/")
+	fname = "output_images/warped_" + tkns[1]
+	Image.fromarray(dst).save(fname)
 
 # Use the calibration factors to work on the test images
-
-'''
 for filename in glob.iglob("test_images/test*.jpg"):
 	img = mpimg.imread(filename)
 	process_image(img, is_test=True)
 
-'''
-
+# Process the project video
 output = 'output_videos/project_video.mp4'
 clip1 = VideoFileClip("project_video.mp4")
 output_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
 output_clip.write_videofile(output, audio=False)
+
+'''
+output = 'output_videos/challenge_video.mp4'
+clip1 = VideoFileClip("challenge_video.mp4")
+output_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
+output_clip.write_videofile(output, audio=False)
+
+
+output = 'output_videos/harder_challenge_video.mp4'
+clip1 = VideoFileClip("harder_challenge_video.mp4")
+output_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
+output_clip.write_videofile(output, audio=False)
+'''
