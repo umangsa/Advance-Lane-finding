@@ -6,18 +6,23 @@ from matplotlib.widgets import Cursor
 import glob
 from PIL import Image
 from moviepy.editor import VideoFileClip
+from collections import deque
 
 # Global variables 
 # chess board features
 nx = 9 # horizontal corners
 ny = 6  # vertical corners
 
-window_width = 25
+window_width = 15
 window_height = 80 # Break image into 9 vertical layers since image height is 720
 margin = 75 # How much to slide left and right for searching
 
 # Define conversions in x and y from pixels space to meters
-road_width = [600]
+road_width = deque(maxlen=5)
+road_width.append(600)
+left_lane = deque(maxlen=3)
+right_lane = deque(maxlen=3)
+
 ym_per_pix = 27/720 # meters per pixel in y dimension
 xm_per_pix = 3.7/750 # meters per pixel in x dimension
 
@@ -88,7 +93,7 @@ def abs_sobel_thresh(gray, orient='x', thresh=(0, 255)):
 	return threshold
 
 
-def image_gradient(img, s_thresh=(170, 255), l_thresh=(20, 100), sx_thresh=(20, 100), dir_thresh=(0, np.pi/2), color_threshold = 100, ksize=9):
+def image_gradient(img, s_thresh=(170, 255), l_thresh=(20, 100), sx_thresh=(20, 100), dir_thresh=(0, np.pi/2), color_threshold = (100, 100), ksize=9):
 
 	# Work on S channel
 	# Threshold the color gradient
@@ -114,7 +119,7 @@ def image_gradient(img, s_thresh=(170, 255), l_thresh=(20, 100), sx_thresh=(20, 
 	R = img[:,:,0]
 	G = img[:,:,1]
 	color_combined = np.zeros_like(R)
-	rg_binary = (R > color_threshold) & (G > color_threshold)
+	rg_binary = (R > color_threshold[0]) & (G > color_threshold[1])
 
 	# Combine the two binary thresholds
 	combined_binary = np.zeros_like(sxbinary)
@@ -133,14 +138,42 @@ def find_window_centroids(warped, window_width, window_height, margin):
 	window_centroids = [] # Store the (left,right) window centroid positions per level
 	window = np.ones(window_width) # Create our window template that we will use for convolutions
 	
+	conv_thresh = 50
 	# First find the two starting positions for the left and right lane by using np.sum to get the vertical image slice
 	# and then np.convolve the vertical image slice with the window template 
 
 	# Sum quarter bottom of image to get slice, could use a different ratio
-	l_sum = np.sum(warped[int(3 * warped.shape[0] / 5):, :int(warped.shape[1] / 2)], axis=0)
+	l_sum = np.sum(warped[int(3 * warped.shape[0] / 8):, :int(warped.shape[1] / 2)], axis=0)
 	l_center = np.argmax(np.convolve(window,l_sum)) - window_width / 2
-	r_sum = np.sum(warped[int(3 * warped.shape[0] / 5):, int(warped.shape[1] / 2):], axis=0)
+	r_sum = np.sum(warped[int(3 * warped.shape[0] / 8):, int(warped.shape[1] / 2):], axis=0)
 	r_center = np.argmax(np.convolve(window,r_sum)) - window_width / 2 + int(warped.shape[1] / 2)
+
+	if(r_center - l_center >= np.mean(road_width) + 50) or (r_center - l_center <= np.mean(road_width) - 50):
+		if lane.detected:
+			l_center = lane.l_center
+			r_center = lane.r_center
+		else:
+			
+			offset = window_width / 2
+			l_min_index = int(max(l_center + offset - margin, 0))
+			l_max_index = int(min(l_center + offset + margin, warped.shape[1]))
+			roi_zone = np.convolve(window,l_sum)
+			conv_strength_l = np.max(roi_zone)
+
+			r_min_index = int(max(r_center + offset - margin, 0))
+			r_max_index = int(min(r_center + offset + margin, warped.shape[1]))
+			roi_zone = np.convolve(window,r_sum)
+			conv_strength_r = np.max(roi_zone)
+
+			if conv_strength_r >= conv_thresh and conv_strength_l >= conv_thresh:
+				print("CRITICAL SITUATION")
+			elif conv_strength_r < conv_thresh and conv_strength_l < conv_thresh:
+				print("CRITICAL SITUATION 2")
+			elif conv_strength_l < conv_thresh :
+				l_center = r_center - np.mean(road_width)
+			elif conv_strength_r < conv_thresh :
+				r_center = l_center + np.mean(road_width)
+
 
 	# Add what we found for the first layer
 	window_centroids.append((l_center,r_center))
@@ -176,7 +209,6 @@ def find_window_centroids(warped, window_width, window_height, margin):
 		r_center = np.argmax(roi_zone) + r_min_index - offset
 		# window_centroids.append((l_center, r_center))
 
-		conv_thresh = 5
 		if conv_strength_r >= conv_thresh and conv_strength_l >= conv_thresh:
 			window_centroids.append((l_center, r_center))
 			l_center_prev = l_center
@@ -184,21 +216,28 @@ def find_window_centroids(warped, window_width, window_height, margin):
 			road_width.append(r_center - l_center)
 		elif conv_strength_r < conv_thresh and conv_strength_l < conv_thresh:
 			window_centroids.append((l_center_prev, r_center_prev))
+			road_width.append(r_center_prev - l_center_prev)
 		elif conv_strength_l < conv_thresh :
-			l_center = r_center - np.mean(road_width[-10:])
+			l_center = r_center - np.mean(road_width)
 			window_centroids.append((l_center, r_center))
 			r_center_prev = r_center
 			l_center_prev = l_center
+			road_width.append(r_center - l_center)
 		elif conv_strength_r < conv_thresh :
-			r_center = l_center + np.mean(road_width[-10:])
+			r_center = l_center + np.mean(road_width)
 			window_centroids.append((l_center, r_center))
 			l_center_prev = l_center
 			r_center_prev = r_center
+			road_width.append(r_center - l_center)
 
+		lane.detected = True
+		lane.l_center = l_center
+		lane.r_center = r_center
 
 	return window_centroids
 
-def sliding_window_search(warped, window_width, window_height, margin):
+def sliding_window_search_convolution(warped, window_width, window_height, margin):
+	# print("New image \n\n")
 	window_centroids = find_window_centroids(warped, window_width, window_height, margin)
 
 	# If we found any window centers
@@ -238,11 +277,10 @@ def sliding_window_search(warped, window_width, window_height, margin):
 		print("no lane detected")
 		output = np.array(cv2.merge((warped, warped, warped)),np.uint8)
 
+	
+
 	return output, leftx, rightx
 
-def histogram_peak_search():
-	histogram = np.sum(warped[warped.shape[0]//2:,:], axis=0)
-	plt.plot(histogram)
 
 
 def project_lanes(warped, Minv, left_fitx, right_fitx, ploty):
@@ -268,11 +306,11 @@ def process_image(image, is_test = False):
 	dst = cv2.undistort(img, mtx, dist, None, mtx)
 	
 	# Get the Color and Gradient  threshold
-	gray_gradient = image_gradient(dst, s_thresh=(80, 255), \
-		l_thresh=(155, 255), \
-		sx_thresh=(30, 240), \
+	gray_gradient = image_gradient(dst, s_thresh=(120, 255), \
+		l_thresh=(20, 255), \
+		sx_thresh=(20, 255), \
 		dir_thresh=(np.pi/6, np.pi/2), \
-		color_threshold = 150, \
+		color_threshold = (80, 80),\
 		ksize=3)
 
 	# Perspective transform to get top view
@@ -291,7 +329,9 @@ def process_image(image, is_test = False):
 	warped, Minv = fix_perspective(gray_gradient, mtx, dist, corners, dest)
 
 	# Perform sliding window search using convolution to locate the lanes
-	output, leftx, rightx = sliding_window_search(warped, window_width, window_height, margin)
+	output, leftx, rightx = sliding_window_search_convolution(warped, window_width, window_height, margin)
+	# output, left_fitx, right_fitx, ploty = sliding_window_search_histogram(warped)
+
 
 	# Fit the lane lines
 
@@ -309,10 +349,16 @@ def process_image(image, is_test = False):
 	right_fitx = left_fit[0] * ploty * ploty + right_fit[1] * ploty + right_fit[2]
 	right_fitx = np.array(right_fitx, np.int32)
 
-	radius_l, radius_r = calculate_radius(np.array(res_yvals), np.array(leftx), np.array(rightx))
+	left_lane.append(left_fitx)
+	right_lane.append(right_fitx)
+
+
+	final_left_lane = np.mean(left_lane, axis=0)
+	final_right_lane = np.mean(right_lane, axis=0)
+	# radius_l, radius_r = calculate_radius(np.array(res_yvals), final_left_lane, final_right_lane)
 
 	# Combine the result with the original image
-	newwarp = project_lanes(warped, Minv, left_fitx, right_fitx, ploty)
+	newwarp = project_lanes(warped, Minv, final_left_lane, final_right_lane, ploty)
 	result = cv2.addWeighted(img, 1, newwarp, 0.3, 0)
 
 	if is_test == True:	
@@ -320,34 +366,42 @@ def process_image(image, is_test = False):
 		tkns = filename.split("/")
 		fname = "output_images/warped_" + tkns[1]
 
-		f, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(1, 6, figsize=(24, 9))
-		f.tight_layout()
+		fig = plt.figure(figsize=(16, 9))
 
+		# f, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6, 3, figsize=(24, 9))
+		# fig.tight_layout()
+
+		ax1 = fig.add_subplot(231)
 		ax1.imshow(img)
 		ax1.set_title('Original Image')
 
+		ax2 = fig.add_subplot(232)
 		ax2.imshow(gray_gradient, cmap='gray')
 		ax2.set_title("After Thresholding")
 
+		ax3 = fig.add_subplot(233)
 		ax3.imshow(warped, cmap='gray')
 		ax3.set_title('After Perspective transform')
 		plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
 		cursor = Cursor(ax1, useblit=True, color='red', linewidth=2)
 
 		# histogram_peak_search()
+		ax4 = fig.add_subplot(235)		
 		ax4.imshow(output)
 		ax4.set_title('Detected lanes')
 
 		mark_size = 3
+		ax5 = fig.add_subplot(236)
+		ax5.imshow(warped, cmap='gray')
 		ax5.plot(leftx, res_yvals, 'o', color='red', markersize=mark_size)
 		ax5.plot(rightx, res_yvals, 'o', color='blue', markersize=mark_size)
-		ax5.plot(left_fitx, ploty, color='green', linewidth=3)
-		ax5.plot(right_fitx, ploty, color='green', linewidth=3)
-		ax5.invert_yaxis() # to visualize as we do the images
-
+		ax5.plot(left_fitx, ploty, color='green', linewidth=1)
+		ax5.plot(right_fitx, ploty, color='green', linewidth=1)
+		
+		ax6 = fig.add_subplot(234)
 		ax6.imshow(result)
 
-		f.savefig(fname)
+		fig.savefig(fname)
 		plt.show()
 
 	return result
@@ -373,6 +427,8 @@ def calculate_radius(ploty, left, right):
 # Use all the calibration images in the camera_cal folder
 # to get the final mtx and dist factors
 global mtx, dist
+lane = Lane()
+
 ret, mtx, dist, rvecs, tvecs = calibrate_camera()
 
 # Undistort and perform a perspective transform of the images
@@ -407,8 +463,8 @@ for filename in glob.iglob("camera_cal/calibration*.jpg"):
 '''
 
 # Use the calibration factors to work on the test images
-'''
 
+'''
 for filename in glob.iglob("test_images/test*.jpg"):
 	img = mpimg.imread(filename)
 	process_image(img, is_test=True)
