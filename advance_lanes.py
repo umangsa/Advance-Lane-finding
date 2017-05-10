@@ -15,18 +15,18 @@ ny = 6  # vertical corners
 
 window_width = 15
 window_height = 80 # Break image into 9 vertical layers since image height is 720
-margin = 75 # How much to slide left and right for searching
+margin = 50 # How much to slide left and right for searching
 ym_per_pix = 3/72.0 # meters per pixel in y dimension
 xm_per_pix = 3.7/660.0 # meters per pixel in x dimension
 camera_center = 640 # center of the image
 
 
 # Define conversions in x and y from pixels space to meters
-road_width = deque(maxlen=5)
-road_width.append(600)
-left_lane = deque(maxlen=15)
-right_lane = deque(maxlen=15)
-road_radius = deque(maxlen=15)
+road_width = deque(maxlen=2)
+road_width.append(660)
+left_lane = deque(maxlen=1)
+right_lane = deque(maxlen=1)
+road_radius = deque(maxlen=1)
 
 
 
@@ -140,6 +140,7 @@ def window_mask(width, height, img_ref, center,level):
 def find_window_centroids(warped, window_width, window_height, margin):
 	window_centroids = [] # Store the (left,right) window centroid positions per level
 	window = np.ones(window_width) # Create our window template that we will use for convolutions
+	window = [1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]
 	
 	conv_thresh = 50
 	# First find the two starting positions for the left and right lane by using np.sum to get the vertical image slice
@@ -321,14 +322,6 @@ def process_image(image, is_test = False):
 	img = np.copy(image)
 	dst = cv2.undistort(img, mtx, dist, None, mtx)
 	
-	# Get the Color and Gradient  threshold
-	gray_gradient = image_gradient(dst, s_thresh=(120, 255), \
-		l_thresh=(20, 255), \
-		sx_thresh=(20, 255), \
-		dir_thresh=(np.pi/6, np.pi/2), \
-		color_threshold = (80, 80),\
-		ksize=3)
-
 	# Perspective transform to get top view
 	bottom_left = [220,720]
 	bottom_right = [1110, 720]
@@ -342,10 +335,17 @@ def process_image(image, is_test = False):
 	top_right_dst = [920, 1]
 	dest = np.float32([top_left_dst, top_right_dst, bottom_right_dst, bottom_left_dst])
 
-	warped, Minv = fix_perspective(gray_gradient, mtx, dist, corners, dest)
+	warped, Minv = fix_perspective(dst, mtx, dist, corners, dest)
 
-	# Perform sliding window search using convolution to locate the lanes
-	output, leftx, rightx = sliding_window_search_convolution(warped, window_width, window_height, margin)
+		# Get the Color and Gradient  threshold
+	gray_gradient = image_gradient(warped, s_thresh=(120, 255), \
+		l_thresh=(20, 255), \
+		sx_thresh=(20, 255), \
+		dir_thresh=(np.pi/6, np.pi/2), \
+		color_threshold = (120, 120),\
+		ksize=3)
+# Perform sliding window search using convolution to locate the lanes
+	output, leftx, rightx = sliding_window_search_convolution(gray_gradient, window_width, window_height, margin)
 	# output, left_fitx, right_fitx, ploty = sliding_window_search_histogram(warped)
 
 
@@ -382,7 +382,7 @@ def process_image(image, is_test = False):
 
 
 	# Combine the result with the original image
-	newwarp = project_lanes(warped, Minv, final_left_lane, final_right_lane, ploty)
+	newwarp = project_lanes(gray_gradient, Minv, final_left_lane, final_right_lane, ploty)
 	result = cv2.addWeighted(img, 1, newwarp, 0.3, 0)
 	cv2.putText(result,"Radius: {:.2f} m".format(radius), (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
 	cv2.putText(result,"Offset: {:.2f} m".format(car_offset), (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
@@ -398,30 +398,30 @@ def process_image(image, is_test = False):
 		ax1.imshow(img)
 		ax1.set_title('Original Image')
 
-		ax2 = fig.add_subplot(232)
+		ax2 = fig.add_subplot(233)
 		ax2.imshow(gray_gradient, cmap='gray')
 		ax2.set_title("After Thresholding")
 
-		ax3 = fig.add_subplot(233)
+		ax3 = fig.add_subplot(232)
 		ax3.imshow(warped, cmap='gray')
 		ax3.set_title('After Perspective transform')
 		plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
 		cursor = Cursor(ax1, useblit=True, color='red', linewidth=2)
 
 		# histogram_peak_search()
-		ax4 = fig.add_subplot(235)		
+		ax4 = fig.add_subplot(234)		
 		ax4.imshow(output)
 		ax4.set_title('Detected lanes')
 
 		mark_size = 3
-		ax5 = fig.add_subplot(236)
+		ax5 = fig.add_subplot(235)
 		ax5.imshow(warped, cmap='gray')
 		ax5.plot(leftx, res_yvals, 'o', color='red', markersize=mark_size)
 		ax5.plot(rightx, res_yvals, 'o', color='blue', markersize=mark_size)
 		ax5.plot(left_fitx, ploty, color='green', linewidth=1)
 		ax5.plot(right_fitx, ploty, color='green', linewidth=1)
 		
-		ax6 = fig.add_subplot(234)
+		ax6 = fig.add_subplot(236)
 		ax6.imshow(result)
 
 		fig.savefig(fname)
