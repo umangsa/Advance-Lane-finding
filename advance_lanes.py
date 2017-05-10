@@ -331,8 +331,8 @@ def process_image(image, is_test = False):
 	
 	bottom_left_dst = [320,720]
 	bottom_right_dst = [920, 720]
-	top_left_dst = [320, 1]
-	top_right_dst = [920, 1]
+	top_left_dst = [320, 0]
+	top_right_dst = [920, 0]
 	dest = np.float32([top_left_dst, top_right_dst, bottom_right_dst, bottom_left_dst])
 
 	warped, Minv = fix_perspective(dst, mtx, dist, corners, dest)
