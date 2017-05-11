@@ -16,14 +16,12 @@ ny = 6  # vertical corners
 window_width = 15
 window_height = 80 # Break image into 9 vertical layers since image height is 720
 margin = 50 # How much to slide left and right for searching
+# Define conversions in x and y from pixels space to meters
 ym_per_pix = 3/72.0 # meters per pixel in y dimension
 xm_per_pix = 3.7/660.0 # meters per pixel in x dimension
-camera_center = 640 # center of the image
+camera_center = 650 # center of the image
 
 
-# Define conversions in x and y from pixels space to meters
-road_width = deque(maxlen=1)
-road_width.append(700)
 left_lane = deque(maxlen=1)
 right_lane = deque(maxlen=1)
 road_radius = deque(maxlen=1)
@@ -41,7 +39,7 @@ class Line():
         #polynomial coefficients averaged over the last n iterations
         self.best_fit = None  
         #polynomial coefficients for the most recent fit
-        self.current_fit = deque(maxlen=5)
+        self.current_fit = deque(maxlen=3)
         #radius of curvature of the line in some units
         self.radius_of_curvature = None 
         #distance in meters of vehicle center from the line
@@ -132,6 +130,7 @@ def search_lanes(binary_warped):
 	nonzero = binary_warped.nonzero()
 	nonzeroy = np.array(nonzero[0])
 	nonzerox = np.array(nonzero[1])
+
 	# Current positions to be updated for each window
 	leftx_current = leftx_base
 	rightx_current = rightx_base
@@ -309,9 +308,9 @@ def process_image(image, is_test = False):
 	cv2.putText(result,"Radius: {:.2f} m".format(radius), (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
 	if car_offset < 0:
 		cv2.putText(result,"Car right of center: {:.2f} m".format(abs(car_offset)), (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
-	if car_offset > 0:
+	elif car_offset > 0:
 		cv2.putText(result,"Car left of center: {:.2f} m".format(abs(car_offset)), (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
-	else
+	else:
 		cv2.putText(result,"Car exactly centered", (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
 
 	if is_test == True:	
