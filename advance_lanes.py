@@ -13,19 +13,13 @@ from collections import deque
 nx = 9 # horizontal corners
 ny = 6  # vertical corners
 
-window_width = 15
-window_height = 80 # Break image into 9 vertical layers since image height is 720
-margin = 50 # How much to slide left and right for searching
 # Define conversions in x and y from pixels space to meters
 ym_per_pix = 3/72.0 # meters per pixel in y dimension
-xm_per_pix = 3.7/660.0 # meters per pixel in x dimension
-camera_center = 650 # center of the image
+xm_per_pix = 3.7/675.0 # meters per pixel in x dimension
+camera_center = 675.0 # center of the image
 
 
-left_lane = deque(maxlen=1)
-right_lane = deque(maxlen=1)
 road_radius = deque(maxlen=1)
-
 
 
 class Line():
@@ -110,7 +104,7 @@ def abs_sobel_thresh(gray, orient='x', thresh=(0, 255)):
 	threshold[(binary_output >= thresh[0]) & (binary_output <= thresh[1])] = 1
 	return threshold
 
-def search_lanes(binary_warped):
+def full_search(binary_warped):
 	# Assuming you have created a warped binary image called "binary_warped"
 	# Take a histogram of the bottom half of the image
 	histogram = np.sum(binary_warped[int(binary_warped.shape[0]/2):,:], axis=0)
@@ -184,9 +178,95 @@ def search_lanes(binary_warped):
 	out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
 
 
+	return True, out_img, left_fit, right_fit
+
+
+def margin_search(binary_warped):
+	# Create an output image to draw on and  visualize the result
+	out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255
+
+	# Identify the x and y positions of all nonzero pixels in the image
+	nonzero = binary_warped.nonzero()
+	nonzeroy = np.array(nonzero[0])
+	nonzerox = np.array(nonzero[1])
+
+	# Set the width of the windows +/- margin
+	margin = 100
+
+	left_fit = left_lane.best_fit
+	right_fit = right_lane.best_fit
+
+	left_lane_inds = ((nonzerox > (left_fit[0]*(nonzeroy**2) + left_fit[1]*nonzeroy + left_fit[2] - margin)) & \
+		(nonzerox < (left_fit[0]*(nonzeroy**2) + left_fit[1]*nonzeroy + left_fit[2] + margin))) 
+	right_lane_inds = ((nonzerox > (right_fit[0]*(nonzeroy**2) + right_fit[1]*nonzeroy + right_fit[2] - margin)) & \
+		(nonzerox < (right_fit[0]*(nonzeroy**2) + right_fit[1]*nonzeroy + right_fit[2] + margin)))  
+
+
+	# Extract left and right line pixel positions
+	leftx = nonzerox[left_lane_inds]
+	lefty = nonzeroy[left_lane_inds] 
+	rightx = nonzerox[right_lane_inds]
+	righty = nonzeroy[right_lane_inds] 
+
+
+	# Fit a second order polynomial to each
+	left_fit = np.polyfit(lefty, leftx, 2)
+	right_fit = np.polyfit(righty, rightx, 2)
+
+	status = sanity_check(left_fit, right_fit, leftx, lefty, rightx, righty)
+	if status:
+		out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
+		out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
+	else:
+		left_fit = []
+		right_fit = []
+
+	return status, out_img, left_fit, right_fit
+
+def sanity_check(left_fit, right_fit, leftx, lefty, rightx, righty):
+	# check if lanes are parallel
+	# abs (dist1) > 0.3
+	# dist2 < 705 or > 850
+	if (abs(right_fit[1] - left_fit[1]) > 0.3) and (((right_fit[2] - left_fit[2]) > 900) or ((right_fit[2] - left_fit[2] < 705))):
+
+		return False
+	return True
+
+def search_lanes(binary_warped):
+	if left_lane.detected and right_lane.detected:
+		status, out_img, left_fit, right_fit = margin_search(binary_warped)
+		if status == False:
+			status, out_img, left_fit, right_fit = full_search(binary_warped)
+	else:
+		print("Perform full search of lanes")
+		status, out_img, left_fit, right_fit = full_search(binary_warped)
+
+	if status:
+		left_lane.detected = True
+		right_lane.detected = True
+		left_lane.best_fit = left_fit
+		right_lane.best_fit = right_fit
+	else:
+		left_lane.detected = False
+		right_lane.detected = False
+		left_lane.best_fit = None
+		right_lane.best_fit = None
+
 	return out_img, left_fit, right_fit
 
+
+
 def lane_pipeline(img):
+	fig = plt.figure(figsize=(16, 9))
+	ax1 = fig.add_subplot(231)
+
+	# s_thresh=(180, 200)
+	# sx_thresh=(30, 230)
+	# l_thresh=(30, 130)
+	# y_thresh=(115, 210)
+	# color_threshold=(100, 220)
+
+
 	s_thresh=(100, 240)
 	sx_thresh=(30, 230)
 	l_thresh=(150, 225)
@@ -199,7 +279,9 @@ def lane_pipeline(img):
 	G = img[:,:,1]
 	color_combined = np.zeros_like(R)
 	rg_binary = (R > color_threshold[0]) & (G > color_threshold[1])
-
+	ax1.set_title('RG')
+	ax1.imshow(rg_binary, cmap='gray')
+	
 	# Convert to HSV color space and separate the V channel
 	hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
 	l_channel = hsv[:,:,1]
@@ -212,15 +294,24 @@ def lane_pipeline(img):
 	# Threshold x gradient
 	sxbinary = np.zeros_like(scaled_sobel)
 	sxbinary[(scaled_sobel >= sx_thresh[0]) & (scaled_sobel <= sx_thresh[1])] = 1
-
+	ax2 = fig.add_subplot(232)
+	ax2.set_title('SX')
+	ax2.imshow(sxbinary, cmap='gray')
+	
 	# Threshold color channel
 	s_binary = np.zeros_like(s_channel)
 	s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
+	ax3 = fig.add_subplot(233)
+	ax3.set_title('S')
+	ax3.imshow(s_binary, cmap='gray')
 
 	# L Channel to filter shadows
 	hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
 	l_channel = hls[:,:,1]
 	l_binary = (l_channel > l_thresh[0]) & (l_channel <= l_thresh[1])
+	ax4 = fig.add_subplot(234)
+	ax4.set_title('L')
+	ax4.imshow(l_binary, cmap='gray')
 
 	#equalize Y channel from YUV
 	yuv = cv2.cvtColor(img, cv2.COLOR_RGB2YUV).astype(np.float)
@@ -229,9 +320,21 @@ def lane_pipeline(img):
 	# Stack each channel
 	# Note color_binary[:, :, 0] is all 0s, effectively an all black image. It might
 	# be beneficial to replace this channel with something else.
-	color_binary = np.dstack(( np.zeros_like(sxbinary), sxbinary, s_binary, l_binary))
+	ax5 = fig.add_subplot(235)
+	ax5.set_title('Y')
+	ax5.imshow(y_binary, cmap='gray')
+
+	ax6 = fig.add_subplot(236)
+	yl = np.zeros_like(sxbinary)
+	yl[((l_binary == 1) & (y_binary == 1))] = 1
+	ax6.imshow(yl, cmap='gray')
+	fig.savefig("output_images/ColorMap.jpg")
+	
 	combined_binary = np.zeros_like(sxbinary)
 	combined_binary[((s_binary == 1) | (sxbinary == 1) | (rg_binary == 1)) & ((l_binary == 1) | (y_binary == 1))] = 1
+	# combined_binary[((s_binary == 1) | (sxbinary == 1) | (rg_binary == 1)) | (yl == 1)] = 1
+
+	color_binary = np.dstack(( np.zeros_like(sxbinary), sxbinary, s_binary, l_binary, rg_binary, y_binary))
 	return color_binary, combined_binary
 
 
@@ -418,16 +521,23 @@ for filename in glob.iglob("camera_cal/calibration*.jpg"):
 # Use the calibration factors to work on the test images
 
 for filename in glob.iglob("test_images/*.jpg"):
+	# print("File = {}".format(filename))
 	img = mpimg.imread(filename)
 	process_image(img, is_test=True)
 
 # Process the project video
+
+# Reset lane detections
+left_lane.detected = False
+left_lane.best_fit = None
+right_lane.detected = False
+right_lane.best_fit = None
+
+'''
 output = 'output_videos/project_video.mp4'
 clip1 = VideoFileClip("project_video.mp4")
 output_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
 output_clip.write_videofile(output, audio=False)
-'''
-
 
 output = 'output_videos/challenge_video.mp4'
 clip1 = VideoFileClip("challenge_video.mp4")
