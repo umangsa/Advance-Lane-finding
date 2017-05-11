@@ -19,7 +19,7 @@ xm_per_pix = 3.7/675.0 # meters per pixel in x dimension
 camera_center = 675.0 # center of the image
 
 
-road_radius = deque(maxlen=1)
+# road_radius = deque(maxlen=1)
 
 
 class Line():
@@ -33,9 +33,9 @@ class Line():
         #polynomial coefficients averaged over the last n iterations
         self.best_fit = None  
         #polynomial coefficients for the most recent fit
-        self.current_fit = deque(maxlen=3)
+        self.current_fit = deque(maxlen=5)
         #radius of curvature of the line in some units
-        self.radius_of_curvature = None 
+        self.radius_of_curvature = deque(maxlen=5) 
         #distance in meters of vehicle center from the line
         self.line_base_pos = None 
         #difference in fit coefficients between last and new fits
@@ -244,48 +244,38 @@ def search_lanes(binary_warped):
 	if status:
 		left_lane.detected = True
 		right_lane.detected = True
-		left_lane.best_fit = left_fit
-		right_lane.best_fit = right_fit
+		left_lane.current_fit.append(left_fit)
+		right_lane.current_fit.append(right_fit)
+		left_lane.best_fit = np.mean(left_lane.current_fit, axis=0)
+		right_lane.best_fit = np.mean(right_lane.current_fit, axis=0)
 	else:
 		left_lane.detected = False
 		right_lane.detected = False
-		left_lane.best_fit = None
-		right_lane.best_fit = None
+		# left_lane.current_fit = None
+		# right_lane.current_fit = None
 
-	return out_img, left_fit, right_fit
+	return out_img, left_lane.best_fit, right_lane.best_fit
 
 
 
 def lane_pipeline(img):
-	fig = plt.figure(figsize=(16, 9))
-	ax1 = fig.add_subplot(231)
-
-	# s_thresh=(180, 200)
-	# sx_thresh=(30, 230)
-	# l_thresh=(30, 130)
-	# y_thresh=(115, 210)
-	# color_threshold=(100, 220)
-
-
 	s_thresh=(100, 240)
 	sx_thresh=(30, 230)
 	l_thresh=(150, 225)
 	y_thresh=(50, 250)
 	color_threshold=(100, 220)
-	# img = np.copy(img)
 
 	# R & G helps with white and yellow lines
 	R = img[:,:,0]
 	G = img[:,:,1]
 	color_combined = np.zeros_like(R)
 	rg_binary = (R > color_threshold[0]) & (G > color_threshold[1])
-	ax1.set_title('RG')
-	ax1.imshow(rg_binary, cmap='gray')
 	
 	# Convert to HSV color space and separate the V channel
 	hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
 	l_channel = hsv[:,:,1]
 	s_channel = hsv[:,:,2]
+
 	# Sobel x
 	sobelx = cv2.Sobel(l_channel, cv2.CV_64F, 1, 0) # Take the derivative in x
 	abs_sobelx = np.absolute(sobelx) # Absolute x derivative to accentuate lines away from horizontal
@@ -294,45 +284,29 @@ def lane_pipeline(img):
 	# Threshold x gradient
 	sxbinary = np.zeros_like(scaled_sobel)
 	sxbinary[(scaled_sobel >= sx_thresh[0]) & (scaled_sobel <= sx_thresh[1])] = 1
-	ax2 = fig.add_subplot(232)
-	ax2.set_title('SX')
-	ax2.imshow(sxbinary, cmap='gray')
 	
 	# Threshold color channel
 	s_binary = np.zeros_like(s_channel)
 	s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
-	ax3 = fig.add_subplot(233)
-	ax3.set_title('S')
-	ax3.imshow(s_binary, cmap='gray')
 
 	# L Channel to filter shadows
 	hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
 	l_channel = hls[:,:,1]
 	l_binary = (l_channel > l_thresh[0]) & (l_channel <= l_thresh[1])
-	ax4 = fig.add_subplot(234)
-	ax4.set_title('L')
-	ax4.imshow(l_binary, cmap='gray')
 
 	#equalize Y channel from YUV
 	yuv = cv2.cvtColor(img, cv2.COLOR_RGB2YUV).astype(np.float)
 	y_channel = yuv[:,:,0]
 	y_binary = (y_channel > y_thresh[0]) & (y_channel <= y_thresh[1])
+
 	# Stack each channel
 	# Note color_binary[:, :, 0] is all 0s, effectively an all black image. It might
 	# be beneficial to replace this channel with something else.
-	ax5 = fig.add_subplot(235)
-	ax5.set_title('Y')
-	ax5.imshow(y_binary, cmap='gray')
-
-	ax6 = fig.add_subplot(236)
 	yl = np.zeros_like(sxbinary)
 	yl[((l_binary == 1) & (y_binary == 1))] = 1
-	ax6.imshow(yl, cmap='gray')
-	fig.savefig("output_images/ColorMap.jpg")
 	
 	combined_binary = np.zeros_like(sxbinary)
 	combined_binary[((s_binary == 1) | (sxbinary == 1) | (rg_binary == 1)) & ((l_binary == 1) | (y_binary == 1))] = 1
-	# combined_binary[((s_binary == 1) | (sxbinary == 1) | (rg_binary == 1)) | (yl == 1)] = 1
 
 	color_binary = np.dstack(( np.zeros_like(sxbinary), sxbinary, s_binary, l_binary, rg_binary, y_binary))
 	return color_binary, combined_binary
@@ -362,12 +336,6 @@ def process_image(image, is_test = False):
 	img = np.copy(image)
 	dst = cv2.undistort(img, mtx, dist, None, mtx)
 	
-	# Perspective transform to get top view
-	# bottom_left = [282 , 666]
-	# bottom_right = [1025, 666]
-	# top_left = [560, 474]
-	# top_right = [724, 474]
-
 	bottom_left = [282 , 666]
 	bottom_right = [1025, 666]
 	top_left = [597, 450]
@@ -393,8 +361,6 @@ def process_image(image, is_test = False):
 	ploty = np.linspace(0, gray_gradient.shape[0]-1, gray_gradient.shape[0] )
 	left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
 	right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
-
-
 
 	# Calculate radius of the road curvature
 	radius = calculate_radius(ploty, left_fitx, right_fitx)
@@ -428,7 +394,6 @@ def process_image(image, is_test = False):
 		ax1.set_title('Original Image')
 
 		ax2 = fig.add_subplot(233)
-		# ax2.imshow(color_image)
 		ax2.imshow(gray_gradient, cmap='gray')
 		ax2.set_title("After Thresholding")
 
@@ -454,7 +419,6 @@ def process_image(image, is_test = False):
 		ax6.imshow(result)
 
 		fig.savefig(fname)
-		# plt.show()
 
 	return result
 
@@ -471,9 +435,10 @@ def calculate_radius(ploty, left, right):
 	left_curverad = ((1 + (2*left_fit[0]*y_eval + left_fit[1])**2)**1.5) / np.absolute(2*left_fit[0])
 	right_curverad = ((1 + (2*right_fit[0]*y_eval + right_fit[1])**2)**1.5) / np.absolute(2*right_fit[0])
 
-	radius = (left_curverad+right_curverad)/2.0
-	road_radius.append(radius)
-	radius = np.mean(road_radius)
+	left_lane.radius_of_curvature.append(left_curverad)
+	right_lane.radius_of_curvature.append(right_curverad)
+
+	radius = (np.mean(left_lane.radius_of_curvature) + np.mean(right_lane.radius_of_curvature))/2.0
 
 	return radius
 
@@ -496,24 +461,6 @@ for filename in glob.iglob("camera_cal/calibration*.jpg"):
 	img = mpimg.imread(filename)
 	img_size = img.shape
 	dst = cv2.undistort(img, mtx, dist, None, mtx)
-	'''
-	gray = cv2.cvtColor(dst, cv2.COLOR_RGB2GRAY)
-	ret, corners = cv2.findChessboardCorners(gray, (nx, ny), None)
-	if ret:
-		src = np.float32(
-			[corners[0],
-			corners[nx-1],
-			corners[-1],
-			corners[-nx]])
-
-		dest = np.float32(
-			[[100, 100], 
-			[img_size[0] - 100, 100], 
-			[img_size[0]-100, img_size[1]-100], 
-			[100, img_size[1]-100]])
-
-		warped, Minv = fix_perspective(dst, mtx, dist, src, dest)
-	'''
 	tkns = filename.split("/")
 	fname = "output_images/warped_" + tkns[1]
 	Image.fromarray(dst).save(fname)
@@ -530,15 +477,19 @@ for filename in glob.iglob("test_images/*.jpg"):
 # Reset lane detections
 left_lane.detected = False
 left_lane.best_fit = None
+left_lane.current_fit.clear()
+left_lane.radius_of_curvature.clear()
 right_lane.detected = False
 right_lane.best_fit = None
+right_lane.current_fit.clear()
+right_lane.radius_of_curvature.clear()
 
-'''
 output = 'output_videos/project_video.mp4'
 clip1 = VideoFileClip("project_video.mp4")
 output_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
 output_clip.write_videofile(output, audio=False)
 
+'''
 output = 'output_videos/challenge_video.mp4'
 clip1 = VideoFileClip("challenge_video.mp4")
 output_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
