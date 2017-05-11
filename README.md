@@ -23,7 +23,7 @@ The goals / steps of this project are the following:
 [image2]: ./output_images/warped_calibration1.jpg "Calibrated checkerboard"
 [image3]: ./test_images/test11.jpg "Original lane image"
 [image4]: ./output_images/warped_test11.jpg "Pipeline"
-[image6]: ./output_images/warped_straight_lines1 "Pipeline"
+[image6]: ./output_images/warped_straight_lines1.jpg "Pipeline"
 [image5]: ./output_images/undistort_test11.jpg "Un-distorted lane image"
 [video1]: ./output_videos/project_video.mp4 "Video"
 
