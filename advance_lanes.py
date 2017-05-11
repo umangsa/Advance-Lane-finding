@@ -22,19 +22,36 @@ camera_center = 640 # center of the image
 
 
 # Define conversions in x and y from pixels space to meters
-road_width = deque(maxlen=2)
-road_width.append(660)
+road_width = deque(maxlen=1)
+road_width.append(700)
 left_lane = deque(maxlen=1)
 right_lane = deque(maxlen=1)
 road_radius = deque(maxlen=1)
 
 
 
-class Lane():
-	def __init__(self):
-		self.detected = False
-		self.l_center = 0
-		self.r_center = 0
+class Line():
+    def __init__(self):
+        # was the line detected in the last iteration?
+        self.detected = False  
+        # x values of the last n fits of the line
+        self.recent_xfitted = [] 
+        #average x values of the fitted line over the last n iterations
+        self.bestx = None     
+        #polynomial coefficients averaged over the last n iterations
+        self.best_fit = None  
+        #polynomial coefficients for the most recent fit
+        self.current_fit = deque(maxlen=5)
+        #radius of curvature of the line in some units
+        self.radius_of_curvature = None 
+        #distance in meters of vehicle center from the line
+        self.line_base_pos = None 
+        #difference in fit coefficients between last and new fits
+        self.diffs = np.array([0,0,0], dtype='float') 
+        #x values for detected line pixels
+        self.allx = None  
+        #y values for detected line pixels
+        self.ally = None
 
 
 # Routine for Camera Calibration
@@ -95,28 +112,88 @@ def abs_sobel_thresh(gray, orient='x', thresh=(0, 255)):
 	threshold[(binary_output >= thresh[0]) & (binary_output <= thresh[1])] = 1
 	return threshold
 
+def search_lanes(binary_warped):
+	# Assuming you have created a warped binary image called "binary_warped"
+	# Take a histogram of the bottom half of the image
+	histogram = np.sum(binary_warped[int(binary_warped.shape[0]/2):,:], axis=0)
+	# Create an output image to draw on and  visualize the result
+	out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255
+	# Find the peak of the left and right halves of the histogram
+	# These will be the starting point for the left and right lines
+	midpoint = np.int(histogram.shape[0]/2)
+	leftx_base = np.argmax(histogram[:midpoint])
+	rightx_base = np.argmax(histogram[midpoint:]) + midpoint
 
-def image_gradient(img, s_thresh=(170, 255), l_thresh=(20, 100), sx_thresh=(20, 100), dir_thresh=(0, np.pi/2), color_threshold = (100, 100), ksize=9):
+	# Choose the number of sliding windows
+	nwindows = 9
+	# Set height of windows
+	window_height = np.int(binary_warped.shape[0]/nwindows)
+	# Identify the x and y positions of all nonzero pixels in the image
+	nonzero = binary_warped.nonzero()
+	nonzeroy = np.array(nonzero[0])
+	nonzerox = np.array(nonzero[1])
+	# Current positions to be updated for each window
+	leftx_current = leftx_base
+	rightx_current = rightx_base
+	# Set the width of the windows +/- margin
+	margin = 100
+	# Set minimum number of pixels found to recenter window
+	minpix = 50
+	# Create empty lists to receive left and right lane pixel indices
+	left_lane_inds = []
+	right_lane_inds = []
 
-	# Work on S channel
-	# Threshold the color gradient
-	# S channel for yellow and white lines
-	hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
-	s_channel = hls[:,:,2]
-	s_binary = np.zeros_like(s_channel)
-	s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
+	# Step through the windows one by one
+	for window in range(nwindows):
+		# Identify window boundaries in x and y (and right and left)
+		win_y_low = binary_warped.shape[0] - (window+1)*window_height
+		win_y_high = binary_warped.shape[0] - window*window_height
+		win_xleft_low = leftx_current - margin
+		win_xleft_high = leftx_current + margin
+		win_xright_low = rightx_current - margin
+		win_xright_high = rightx_current + margin
+		# Draw the windows on the visualization image
+		cv2.rectangle(out_img,(win_xleft_low,win_y_low),(win_xleft_high,win_y_high),(0,255,0), 2) 
+		cv2.rectangle(out_img,(win_xright_low,win_y_low),(win_xright_high,win_y_high),(0,255,0), 2) 
+		# Identify the nonzero pixels in x and y within the window
+		good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0]
+		good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0]
+		# Append these indices to the lists
+		left_lane_inds.append(good_left_inds)
+		right_lane_inds.append(good_right_inds)
+		# If you found > minpix pixels, recenter next window on their mean position
+		if len(good_left_inds) > minpix:
+			leftx_current = np.int(np.mean(nonzerox[good_left_inds]))
+		if len(good_right_inds) > minpix:        
+			rightx_current = np.int(np.mean(nonzerox[good_right_inds]))
 
-	# L Channel to filter shadows
-	l_channel = hls[:,:,1]
-	l_binary = (l_channel > l_thresh[0]) & (l_channel <= l_thresh[1])
+	# Concatenate the arrays of indices
+	left_lane_inds = np.concatenate(left_lane_inds)
+	right_lane_inds = np.concatenate(right_lane_inds)
 
-	gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+	# Extract left and right line pixel positions
+	leftx = nonzerox[left_lane_inds]
+	lefty = nonzeroy[left_lane_inds] 
+	rightx = nonzerox[right_lane_inds]
+	righty = nonzeroy[right_lane_inds] 
 
-	# Sobel x
-	sxbinary = abs_sobel_thresh(gray, thresh=sx_thresh)
+	# Fit a second order polynomial to each
+	left_fit = np.polyfit(lefty, leftx, 2)
+	right_fit = np.polyfit(righty, rightx, 2)
 
-	# Directional threshold
-	dir_binary = direction_threshold(gray, dir_thresh, ksize)
+	out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
+	out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
+
+
+	return out_img, left_fit, right_fit
+
+def lane_pipeline(img):
+	s_thresh=(100, 240)
+	sx_thresh=(30, 230)
+	l_thresh=(150, 225)
+	y_thresh=(50, 250)
+	color_threshold=(100, 220)
+	# img = np.copy(img)
 
 	# R & G helps with white and yellow lines
 	R = img[:,:,0]
@@ -124,179 +201,40 @@ def image_gradient(img, s_thresh=(170, 255), l_thresh=(20, 100), sx_thresh=(20, 
 	color_combined = np.zeros_like(R)
 	rg_binary = (R > color_threshold[0]) & (G > color_threshold[1])
 
-	# Combine the two binary thresholds
+	# Convert to HSV color space and separate the V channel
+	hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
+	l_channel = hsv[:,:,1]
+	s_channel = hsv[:,:,2]
+	# Sobel x
+	sobelx = cv2.Sobel(l_channel, cv2.CV_64F, 1, 0) # Take the derivative in x
+	abs_sobelx = np.absolute(sobelx) # Absolute x derivative to accentuate lines away from horizontal
+	scaled_sobel = np.uint8(255*abs_sobelx/np.max(abs_sobelx))
+
+	# Threshold x gradient
+	sxbinary = np.zeros_like(scaled_sobel)
+	sxbinary[(scaled_sobel >= sx_thresh[0]) & (scaled_sobel <= sx_thresh[1])] = 1
+
+	# Threshold color channel
+	s_binary = np.zeros_like(s_channel)
+	s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
+
+	# L Channel to filter shadows
+	hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
+	l_channel = hls[:,:,1]
+	l_binary = (l_channel > l_thresh[0]) & (l_channel <= l_thresh[1])
+
+	#equalize Y channel from YUV
+	yuv = cv2.cvtColor(img, cv2.COLOR_RGB2YUV).astype(np.float)
+	y_channel = yuv[:,:,0]
+	y_binary = (y_channel > y_thresh[0]) & (y_channel <= y_thresh[1])
+	# Stack each channel
+	# Note color_binary[:, :, 0] is all 0s, effectively an all black image. It might
+	# be beneficial to replace this channel with something else.
+	color_binary = np.dstack(( np.zeros_like(sxbinary), sxbinary, s_binary, l_binary))
 	combined_binary = np.zeros_like(sxbinary)
-	# color_combined[(r_g_condition & l_condition) & (s_condition | combined_condition)] = 1
-	combined_binary[(rg_binary &  l_binary) & ((s_binary == 1) | ((sxbinary == 1)  & (dir_binary == 1)))] = 1
-	return combined_binary
+	combined_binary[((s_binary == 1) | (sxbinary == 1) | (rg_binary == 1)) & ((l_binary == 1) | (y_binary == 1))] = 1
+	return color_binary, combined_binary
 
-
-
-def window_mask(width, height, img_ref, center,level):
-    output = np.zeros_like(img_ref)
-    output[int(img_ref.shape[0]-(level+1)*height):int(img_ref.shape[0]-level*height),max(0,int(center-width/2)):min(int(center+width/2),img_ref.shape[1])] = 1
-    return output
-
-def find_window_centroids(warped, window_width, window_height, margin):
-	window_centroids = [] # Store the (left,right) window centroid positions per level
-	window = np.ones(window_width) # Create our window template that we will use for convolutions
-	window = [1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]
-	
-	conv_thresh = 50
-	# First find the two starting positions for the left and right lane by using np.sum to get the vertical image slice
-	# and then np.convolve the vertical image slice with the window template 
-
-	# Sum quarter bottom of image to get slice, could use a different ratio
-	l_sum = np.sum(warped[int(3 * warped.shape[0] / 8):, :int(warped.shape[1] / 2)], axis=0)
-	l_center = np.argmax(np.convolve(window,l_sum)) - window_width / 2
-	r_sum = np.sum(warped[int(3 * warped.shape[0] / 8):, int(warped.shape[1] / 2):], axis=0)
-	r_center = np.argmax(np.convolve(window,r_sum)) - window_width / 2 + int(warped.shape[1] / 2)
-
-	# if the road width is much bigger than the average width in past few frames, 
-	# it could mean that either of the points detected was incorrect
-	if(r_center - l_center >= np.mean(road_width) + 50) or (r_center - l_center <= np.mean(road_width) - 50):
-		# take from previous frame if we had detected a lane earlier
-		if lane.detected:
-			l_center = lane.l_center
-			r_center = lane.r_center
-		else:
-			# no lane was detected earlier
-			# find a strong point that could be part of either the left or right lane
-			# the other lane point would be at a distance = avg road width from chosen reference
-
-			offset = window_width / 2
-			l_min_index = int(max(l_center + offset - margin, 0))
-			l_max_index = int(min(l_center + offset + margin, warped.shape[1]))
-			roi_zone = np.convolve(window,l_sum)
-			conv_strength_l = np.max(roi_zone)
-
-			r_min_index = int(max(r_center + offset - margin, 0))
-			r_max_index = int(min(r_center + offset + margin, warped.shape[1]))
-			roi_zone = np.convolve(window,r_sum)
-			conv_strength_r = np.max(roi_zone)
-
-			if conv_strength_r >= conv_thresh and conv_strength_l >= conv_thresh:
-				print("CRITICAL SITUATION")
-			elif conv_strength_r < conv_thresh and conv_strength_l < conv_thresh:
-				print("CRITICAL SITUATION 2")
-			elif conv_strength_l < conv_thresh :
-				l_center = r_center - np.mean(road_width)
-			elif conv_strength_r < conv_thresh :
-				r_center = l_center + np.mean(road_width)
-
-
-	# Add what we found for the first layer
-	window_centroids.append((l_center,r_center))
-	l_center_prev = l_center
-	r_center_prev = r_center
-
-	# Go through each layer looking for max pixel locations
-	for level in range(1, (int)(warped.shape[0] / window_height)):
-		# convolve the window into the vertical slice of the image
-		image_layer = np.sum(warped[int(warped.shape[0]-(level+1)*window_height) : int(warped.shape[0]-level*window_height),:], axis=0)
-		conv_signal = np.convolve(window, image_layer)
-		
-		# Find the best left centroid by using past left center as a reference
-		# Use window_width/2 as offset because convolution signal reference is at right side of window, not center of window
-		offset = window_width / 2
-		l_min_index = int(max(l_center + offset - margin, 0))
-		l_max_index = int(min(l_center + offset + margin, warped.shape[1]))
-		roi_zone = conv_signal[l_min_index : l_max_index]
-
-		# Filter out zones which have weak conv signal
-		# most likely there are stray pixels or no signal at all
-		conv_strength_l = np.max(roi_zone)
-		l_center = np.argmax(roi_zone) + l_min_index - offset
-
-		# Find the best right centroid by using past right center as a reference
-		r_min_index = int(max(r_center + offset - margin, 0))
-		r_max_index = int(min(r_center + offset + margin, warped.shape[1]))
-		roi_zone = conv_signal[r_min_index : r_max_index]
-		
-		# Filter out zones which have weak conv signal
-		# most likely there are stray pixels or no signal at all
-		conv_strength_r = np.max(roi_zone)
-		r_center = np.argmax(roi_zone) + r_min_index - offset
-		# window_centroids.append((l_center, r_center))
-
-		if conv_strength_r >= conv_thresh and conv_strength_l >= conv_thresh:
-			# both lane points have been detected
-			window_centroids.append((l_center, r_center))
-			l_center_prev = l_center
-			r_center_prev = r_center
-			road_width.append(r_center - l_center)
-		elif conv_strength_r < conv_thresh and conv_strength_l < conv_thresh:
-
-			# none were detected. Take previously detected points
-			window_centroids.append((l_center_prev, r_center_prev))
-			road_width.append(r_center_prev - l_center_prev)
-		elif conv_strength_l < conv_thresh :
-
-			# left lane detection is weak or missing
-			l_center = r_center - np.mean(road_width)
-			window_centroids.append((l_center, r_center))
-			r_center_prev = r_center
-			l_center_prev = l_center
-			road_width.append(r_center - l_center)
-		elif conv_strength_r < conv_thresh :
-
-			# right lane detection is weak or missing
-			r_center = l_center + np.mean(road_width)
-			window_centroids.append((l_center, r_center))
-			l_center_prev = l_center
-			r_center_prev = r_center
-			road_width.append(r_center - l_center)
-
-		lane.detected = True
-		lane.l_center = l_center
-		lane.r_center = r_center
-
-	return window_centroids
-
-def sliding_window_search_convolution(warped, window_width, window_height, margin):
-	# print("New image \n\n")
-	window_centroids = find_window_centroids(warped, window_width, window_height, margin)
-
-	# If we found any window centers
-	if len(window_centroids) > 0:
-
-		# Points used to draw all the left and right windows
-		l_points = np.zeros_like(warped)
-		r_points = np.zeros_like(warped)
-		leftx = []
-		rightx = []
-
-		# Go through each level and draw the windows 	
-		for level in range(0, len(window_centroids)):
-			# get the centroid points to the lanes points
-			leftx.append(window_centroids[level][0])
-			rightx.append(window_centroids[level][1])
-
-			# Window_mask is a function to draw window areas
-			if window_centroids[level][0]:
-				l_mask = window_mask(window_width,window_height,warped,window_centroids[level][0],level)
-				# Add graphic points from window mask here to total pixels found 
-				l_points[(l_points == 255) | ((l_mask == 1) ) ] = 255
-			if window_centroids[level][1]:
-				r_mask = window_mask(window_width,window_height,warped,window_centroids[level][1],level)
-				# Add graphic points from window mask here to total pixels found 
-				r_points[(r_points == 255) | ((r_mask == 1) ) ] = 255
-
-		# Draw the results
-		template = np.array(r_points + l_points, np.uint8) # add both left and right window pixels together
-		zero_channel = np.zeros_like(template) # create a zero color channel
-		template = np.array(cv2.merge((zero_channel, template, zero_channel)), np.uint8) # make window pixels green
-		warpage = np.array(cv2.merge((warped, warped, warped)), np.uint8) # making the original road pixels 3 color channels
-		output = cv2.addWeighted(warpage, 1, template, 0.5, 0.0) # overlay the orignal road image with window results
-
-	# If no window centers found, just display orginal road image
-	else:
-		print("no lane detected")
-		output = np.array(cv2.merge((warped, warped, warped)),np.uint8)
-
-	
-
-	return output, leftx, rightx
 
 
 
@@ -323,69 +261,58 @@ def process_image(image, is_test = False):
 	dst = cv2.undistort(img, mtx, dist, None, mtx)
 	
 	# Perspective transform to get top view
-	bottom_left = [220,720]
-	bottom_right = [1110, 720]
-	top_left = [570, 470]
-	top_right = [722, 470]
+	# bottom_left = [282 , 666]
+	# bottom_right = [1025, 666]
+	# top_left = [560, 474]
+	# top_right = [724, 474]
+
+	bottom_left = [282 , 666]
+	bottom_right = [1025, 666]
+	top_left = [597, 450]
+	top_right = [684, 450]
 	corners = np.float32([top_left, top_right, bottom_right, bottom_left])
 	
-	bottom_left_dst = [320,720]
-	bottom_right_dst = [920, 720]
-	top_left_dst = [320, 0]
-	top_right_dst = [920, 0]
+	bottom_left_dst = [300,720]
+	bottom_right_dst = [1000, 720]
+	top_left_dst = [300, 0]
+	top_right_dst = [1000, 0]
+
 	dest = np.float32([top_left_dst, top_right_dst, bottom_right_dst, bottom_left_dst])
 
 	warped, Minv = fix_perspective(dst, mtx, dist, corners, dest)
 
-		# Get the Color and Gradient  threshold
-	gray_gradient = image_gradient(warped, s_thresh=(120, 255), \
-		l_thresh=(20, 255), \
-		sx_thresh=(20, 255), \
-		dir_thresh=(np.pi/6, np.pi/2), \
-		color_threshold = (120, 120),\
-		ksize=3)
-# Perform sliding window search using convolution to locate the lanes
-	output, leftx, rightx = sliding_window_search_convolution(gray_gradient, window_width, window_height, margin)
-	# output, left_fitx, right_fitx, ploty = sliding_window_search_histogram(warped)
+	# Get the Color and Gradient  threshold
+	color_image, gray_gradient = lane_pipeline(warped)
+
+	# Perform sliding window search using histogram peak to locate the lanes
+	output, left_fit, right_fit = search_lanes(gray_gradient)
+
+	# Generate x and y values for plotting
+	ploty = np.linspace(0, gray_gradient.shape[0]-1, gray_gradient.shape[0] )
+	left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+	right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
 
 
-	# Fit the lane lines
-
-	# Find the y center of the box
-	ploty = range(0, warped.shape[0])
-
-	res_yvals = np.arange(warped.shape[0] - (window_height / 2), 0, - window_height)
-
-	# Polynomial fitting of the lane points
-	left_fit = np.polyfit(res_yvals, leftx, 2)
-	left_fitx = left_fit[0] * ploty * ploty + left_fit[1] * ploty + left_fit[2]
-	left_fitx = np.array(left_fitx, np.int32)
-
-	right_fit = np.polyfit(res_yvals, rightx, 2)
-	right_fitx = left_fit[0] * ploty * ploty + right_fit[1] * ploty + right_fit[2]
-	right_fitx = np.array(right_fitx, np.int32)
-
-	left_lane.append(left_fitx)
-	right_lane.append(right_fitx)
-
-	# smoothen the lanes to avoid jumping of the detections
-	final_left_lane = np.mean(left_lane, axis=0)
-	final_right_lane = np.mean(right_lane, axis=0)
 
 	# Calculate radius of the road curvature
-	radius = calculate_radius(np.array(res_yvals), np.array(leftx), np.array(rightx))
+	radius = calculate_radius(ploty, left_fitx, right_fitx)
 
 	# Calculate the offet of car center w.r.t. lane center
 	# assumption - camera is mounted on the lane center
-	lane_center = (final_left_lane[0] + final_right_lane[0]) / 2.0
-	car_offset = abs(camera_center - lane_center) * xm_per_pix
+	lane_center = (left_fitx[0] + right_fitx[0]) / 2.0
+	car_offset = (camera_center - lane_center) * xm_per_pix
 
 
 	# Combine the result with the original image
-	newwarp = project_lanes(gray_gradient, Minv, final_left_lane, final_right_lane, ploty)
+	newwarp = project_lanes(gray_gradient, Minv, left_fitx, right_fitx, ploty)
 	result = cv2.addWeighted(img, 1, newwarp, 0.3, 0)
 	cv2.putText(result,"Radius: {:.2f} m".format(radius), (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
-	cv2.putText(result,"Offset: {:.2f} m".format(car_offset), (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
+	if car_offset < 0:
+		cv2.putText(result,"Car right of center: {:.2f} m".format(abs(car_offset)), (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
+	if car_offset > 0:
+		cv2.putText(result,"Car left of center: {:.2f} m".format(abs(car_offset)), (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
+	else
+		cv2.putText(result,"Car exactly centered", (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
 
 	if is_test == True:	
 		# plot and save the transformations. Used for the test images only
@@ -399,6 +326,7 @@ def process_image(image, is_test = False):
 		ax1.set_title('Original Image')
 
 		ax2 = fig.add_subplot(233)
+		# ax2.imshow(color_image)
 		ax2.imshow(gray_gradient, cmap='gray')
 		ax2.set_title("After Thresholding")
 
@@ -415,11 +343,10 @@ def process_image(image, is_test = False):
 
 		mark_size = 3
 		ax5 = fig.add_subplot(235)
-		ax5.imshow(warped, cmap='gray')
-		ax5.plot(leftx, res_yvals, 'o', color='red', markersize=mark_size)
-		ax5.plot(rightx, res_yvals, 'o', color='blue', markersize=mark_size)
-		ax5.plot(left_fitx, ploty, color='green', linewidth=1)
-		ax5.plot(right_fitx, ploty, color='green', linewidth=1)
+		ax5.imshow(output)
+		ax5.plot(left_fitx, ploty, color='yellow')
+		ax5.plot(right_fitx, ploty, color='yellow')
+
 		
 		ax6 = fig.add_subplot(236)
 		ax6.imshow(result)
@@ -453,7 +380,8 @@ def calculate_radius(ploty, left, right):
 # Use all the calibration images in the camera_cal folder
 # to get the final mtx and dist factors
 global mtx, dist
-lane = Lane()
+left_lane = Line()
+right_lane = Line()
 
 ret, mtx, dist, rvecs, tvecs = calibrate_camera()
 
@@ -489,7 +417,8 @@ for filename in glob.iglob("camera_cal/calibration*.jpg"):
 	Image.fromarray(dst).save(fname)
 
 # Use the calibration factors to work on the test images
-for filename in glob.iglob("test_images/test*.jpg"):
+
+for filename in glob.iglob("test_images/*.jpg"):
 	img = mpimg.imread(filename)
 	process_image(img, is_test=True)
 
@@ -498,8 +427,9 @@ output = 'output_videos/project_video.mp4'
 clip1 = VideoFileClip("project_video.mp4")
 output_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
 output_clip.write_videofile(output, audio=False)
-
 '''
+
+
 output = 'output_videos/challenge_video.mp4'
 clip1 = VideoFileClip("challenge_video.mp4")
 output_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
