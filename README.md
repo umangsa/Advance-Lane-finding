@@ -23,6 +23,7 @@ The goals / steps of this project are the following:
 [image2]: ./output_images/warped_calibration1.jpg "Calibrated checkerboard"
 [image3]: ./test_images/test11.jpg "Original lane image"
 [image4]: ./output_images/warped_test11.jpg "Pipeline"
+[image6]: ./output_images/warped_straight_lines1 "Pipeline"
 [image5]: ./output_images/undistort_test11.jpg "Un-distorted lane image"
 [video1]: ./output_videos/project_video.mp4 "Video"
 
@@ -86,6 +87,10 @@ My complete pipeline is plotted in stages in the following image
 ![alt text][image4]
 
 The 1st plot on the left is the original image. The 3rd image in 1st row shows the output of the thresholding step. This step has been performed on the top view as it gives a better result
+
+One more sample image of the pipeline
+
+![alt text][image6]
 
 #### 3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
 
