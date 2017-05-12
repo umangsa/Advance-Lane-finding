@@ -367,13 +367,13 @@ def process_image(image, is_test = False):
 
 	# Calculate the offet of car center w.r.t. lane center
 	# assumption - camera is mounted on the lane center
-	lane_center = (left_fitx[0] + right_fitx[0]) / 2.0
+	lane_center = (left_fitx[-1] + right_fitx[-1]) / 2.0
 	car_offset = (camera_center - lane_center) * xm_per_pix
 
 
 	# Combine the result with the original image
 	newwarp = project_lanes(gray_gradient, Minv, left_fitx, right_fitx, ploty)
-	result = cv2.addWeighted(img, 1, newwarp, 0.3, 0)
+	result = cv2.addWeighted(dst, 1, newwarp, 0.3, 0)
 	cv2.putText(result,"Radius: {:.2f} m".format(radius), (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
 	if car_offset < 0:
 		cv2.putText(result,"Car right of center: {:.2f} m".format(abs(car_offset)), (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1,(255,255,255),1)
@@ -466,6 +466,10 @@ for filename in glob.iglob("camera_cal/calibration*.jpg"):
 	Image.fromarray(dst).save(fname)
 
 # Use the calibration factors to work on the test images
+left_lane.current_fit = deque(maxlen=1)
+left_lane.radius_of_curvature = deque(maxlen=1)
+right_lane.current_fit = deque(maxlen=1)
+right_lane.radius_of_curvature = deque(maxlen=1)
 
 for filename in glob.iglob("test_images/*.jpg"):
 	# print("File = {}".format(filename))
@@ -477,12 +481,13 @@ for filename in glob.iglob("test_images/*.jpg"):
 # Reset lane detections
 left_lane.detected = False
 left_lane.best_fit = None
-left_lane.current_fit.clear()
-left_lane.radius_of_curvature.clear()
+left_lane.current_fit = deque(maxlen=5)
+left_lane.radius_of_curvature = deque(maxlen=5)
+
 right_lane.detected = False
 right_lane.best_fit = None
-right_lane.current_fit.clear()
-right_lane.radius_of_curvature.clear()
+right_lane.current_fit = deque(maxlen=5)
+right_lane.radius_of_curvature = deque(maxlen=5)
 
 output = 'output_videos/project_video.mp4'
 clip1 = VideoFileClip("project_video.mp4")
