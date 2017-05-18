@@ -16,7 +16,7 @@ ny = 6  # vertical corners
 # Define conversions in x and y from pixels space to meters
 ym_per_pix = 3/72.0 # meters per pixel in y dimension
 xm_per_pix = 3.7/675.0 # meters per pixel in x dimension
-camera_center = 675.0 # center of the image
+camera_center = 640.0 # center of the image
 
 
 # road_radius = deque(maxlen=1)
